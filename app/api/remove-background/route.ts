@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 type RateRecord = { count: number; resetAt: number };
+type RemoveBgError = { errors?: Array<{ title?: string; code?: string }> };
 
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -60,14 +61,11 @@ export async function POST(request: NextRequest) {
     });
 
     if (!upstreamResponse.ok) {
-      const detail = await upstreamResponse.text();
-      return NextResponse.json(
-        {
-          error: "Failed to remove background.",
-          detail: detail.slice(0, 500),
-        },
-        { status: upstreamResponse.status },
-      );
+      const rawText = await upstreamResponse.text();
+      const parsed = safeParseRemoveBgError(rawText);
+      const normalized = normalizeRemoveBgError(parsed, upstreamResponse.status);
+
+      return NextResponse.json(normalized, { status: upstreamResponse.status });
     }
 
     const buffer = await upstreamResponse.arrayBuffer();
@@ -81,7 +79,10 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch {
-    return NextResponse.json({ error: "Network error while calling Remove.bg." }, { status: 502 });
+    return NextResponse.json(
+      { error: "Unable to reach Remove.bg right now. Please try again in a moment." },
+      { status: 502 },
+    );
   }
 }
 
@@ -107,4 +108,48 @@ function enforceRateLimit(ip: string) {
   existing.count += 1;
   rateLimitStore.set(ip, existing);
   return false;
+}
+
+function safeParseRemoveBgError(rawText: string): RemoveBgError | null {
+  try {
+    return JSON.parse(rawText) as RemoveBgError;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRemoveBgError(parsed: RemoveBgError | null, status: number) {
+  const first = parsed?.errors?.[0];
+  const code = first?.code ?? "unknown_error";
+  const detail = first?.title ?? "Remove.bg returned an unexpected error.";
+
+  if (code === "unknown_foreground") {
+    return {
+      error: "未识别到清晰主体，请换一张前景更明显的图片试试。",
+      detail,
+      code,
+    };
+  }
+
+  if (status === 402) {
+    return {
+      error: "Remove.bg 额度不足，请稍后补充额度后再试。",
+      detail,
+      code,
+    };
+  }
+
+  if (status === 429) {
+    return {
+      error: "Remove.bg 当前请求过多，请稍后重试。",
+      detail,
+      code,
+    };
+  }
+
+  return {
+    error: detail,
+    detail,
+    code,
+  };
 }

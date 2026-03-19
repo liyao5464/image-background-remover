@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "image-background-remover",
+  "compatibility_date": "2026-03-20",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "image-background-remover"
+    }
+  ],
+  "vars": {
+    "RATE_LIMIT_MAX": "5",
+    "RATE_LIMIT_WINDOW": "86400"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

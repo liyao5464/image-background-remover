@@ -4,6 +4,7 @@
   "/api/auth/google/route": "/api/auth/google",
   "/api/auth/logout/route": "/api/auth/logout",
   "/api/auth/session/route": "/api/auth/session",
+  "/api/quota/route": "/api/quota",
   "/api/remove-background/route": "/api/remove-background",
   "/favicon.ico/route": "/favicon.ico",
   "/page": "/"

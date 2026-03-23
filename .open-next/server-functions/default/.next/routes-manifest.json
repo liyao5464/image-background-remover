@@ -59,6 +59,12 @@
       "namedRegex": "^/api/auth/session(?:/)?$"
     },
     {
+      "page": "/api/quota",
+      "regex": "^/api/quota(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/quota(?:/)?$"
+    },
+    {
       "page": "/api/remove-background",
       "regex": "^/api/remove\\-background(?:/)?$",
       "routeKeys": {},

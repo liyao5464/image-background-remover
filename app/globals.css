@@ -94,6 +94,18 @@ a {
   line-height: 1.7;
 }
 
+.quota-pill {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .auth-user-box {
   display: flex;
   align-items: center;

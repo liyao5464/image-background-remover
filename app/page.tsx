@@ -12,6 +12,13 @@ type SessionUser = {
   image?: string;
 };
 
+type QuotaState = {
+  used: number;
+  remaining: number;
+  resetAt: number;
+  limit: number;
+};
+
 declare global {
   interface Window {
     google?: {
@@ -43,6 +50,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [quota, setQuota] = useState<QuotaState | null>(null);
   const [authState, setAuthState] = useState<AuthState>("loading");
   const [googleClientId, setGoogleClientId] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -123,8 +131,23 @@ export default function Home() {
       setUser(payload.user);
       setGoogleClientId(payload.googleClientId);
       setAuthState(payload.enabled ? "ready" : "disabled");
+      if (payload.user) {
+        await fetchQuota();
+      } else {
+        setQuota(null);
+      }
     } catch {
       setAuthState("disabled");
+    }
+  };
+
+  const fetchQuota = async () => {
+    try {
+      const response = await fetch("/api/quota", { cache: "no-store" });
+      const payload = (await response.json()) as { quota: QuotaState | null };
+      setQuota(payload.quota);
+    } catch {
+      setQuota(null);
     }
   };
 
@@ -142,6 +165,7 @@ export default function Home() {
         throw new Error(payload.error || "Google 登录失败");
       }
       setUser(payload.user);
+      await fetchQuota();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Google 登录失败");
     } finally {
@@ -154,6 +178,7 @@ export default function Home() {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
       setUser(null);
+      setQuota(null);
       setResultUrl("");
       setFile(null);
     } finally {
@@ -210,6 +235,7 @@ export default function Home() {
       const nextResultUrl = URL.createObjectURL(blob);
       setResultUrl(nextResultUrl);
       setStatus("success");
+      await fetchQuota();
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err.message : "Unexpected error.");
@@ -263,6 +289,11 @@ export default function Home() {
                   ? `已登录：${user.name}（${user.email}）`
                   : "登录后可开始上传图片并使用你的个人额度。"}
             </div>
+            {user && quota && (
+              <div className="quota-pill">
+                今日已用 {quota.used}/{quota.limit} · 剩余 {quota.remaining} 次
+              </div>
+            )}
           </div>
 
           {user ? (

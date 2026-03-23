@@ -1,20 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { readSession } from "../../lib/auth";
+import { consumeQuota, RATE_LIMIT_WINDOW } from "../../lib/quota";
 
-type RateRecord = { count: number; resetAt: number };
 type RemoveBgError = { errors?: Array<{ title?: string; code?: string }> };
 
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
-const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX ?? 5);
-const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW ?? 60 * 60 * 24);
 const REMOVE_BG_API_URL = "https://api.remove.bg/v1.0/removebg";
-
-const globalStore = globalThis as typeof globalThis & {
-  __rateLimitStore?: Map<string, RateRecord>;
-};
-
-const rateLimitStore = globalStore.__rateLimitStore ?? new Map<string, RateRecord>();
-globalStore.__rateLimitStore = rateLimitStore;
 
 export async function POST(request: NextRequest) {
   const apiKey = process.env.REMOVE_BG_API_KEY;
@@ -22,11 +14,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Server misconfigured: missing REMOVE_BG_API_KEY." }, { status: 500 });
   }
 
-  const ip = getClientIp(request);
-  const rateLimited = enforceRateLimit(ip);
-  if (rateLimited) {
+  const user = await readSession();
+  if (!user) {
+    return NextResponse.json({ error: "请先登录 Google 后再使用抠图功能。" }, { status: 401 });
+  }
+
+  const quota = consumeQuota(user.id);
+  if (!quota.allowed) {
     return NextResponse.json(
-      { error: "Daily limit reached. Please try again later." },
+      {
+        error: "今日额度已用完，请明天再来。",
+        remaining: quota.remaining,
+        limit: quota.limit,
+        resetAt: quota.resetAt,
+      },
       { status: 429, headers: { "Retry-After": String(RATE_LIMIT_WINDOW) } },
     );
   }
@@ -84,30 +85,6 @@ export async function POST(request: NextRequest) {
       { status: 502 },
     );
   }
-}
-
-function getClientIp(request: NextRequest) {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
-  return "unknown";
-}
-
-function enforceRateLimit(ip: string) {
-  const now = Date.now();
-  const existing = rateLimitStore.get(ip);
-
-  if (!existing || existing.resetAt < now) {
-    rateLimitStore.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW * 1000 });
-    return false;
-  }
-
-  if (existing.count >= RATE_LIMIT_MAX) {
-    return true;
-  }
-
-  existing.count += 1;
-  rateLimitStore.set(ip, existing);
-  return false;
 }
 
 function safeParseRemoveBgError(rawText: string): RemoveBgError | null {

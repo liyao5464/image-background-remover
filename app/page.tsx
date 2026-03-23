@@ -1,12 +1,39 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useEffect, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
 
 type ApiError = { error?: string; detail?: string };
 type Status = "idle" | "uploading" | "success" | "error";
+type AuthState = "loading" | "ready" | "disabled";
+type SessionUser = {
+  id: string;
+  name: string;
+  email: string;
+  image?: string;
+};
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (options: {
+            client_id: string;
+            callback: (response: { credential: string }) => void;
+            auto_select?: boolean;
+            cancel_on_tap_outside?: boolean;
+          }) => void;
+          renderButton: (element: HTMLElement, options: Record<string, unknown>) => void;
+          prompt: () => void;
+        };
+      };
+    };
+  }
+}
 
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const GOOGLE_SCRIPT = "https://accounts.google.com/gsi/client";
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
@@ -15,6 +42,10 @@ export default function Home() {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [authState, setAuthState] = useState<AuthState>("loading");
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -23,7 +54,117 @@ export default function Home() {
     };
   }, [originalUrl, resultUrl]);
 
+  useEffect(() => {
+    void fetchSession();
+  }, []);
+
+  useEffect(() => {
+    if (authState !== "ready" || !googleClientId || user) return;
+
+    let cancelled = false;
+    const initGoogle = () => {
+      if (cancelled || !window.google) return;
+      window.google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: ({ credential }) => {
+          void signInWithGoogle(credential);
+        },
+        cancel_on_tap_outside: true,
+      });
+      const button = document.getElementById("google-signin-button");
+      if (button) {
+        button.innerHTML = "";
+        window.google.accounts.id.renderButton(button, {
+          theme: "outline",
+          size: "large",
+          shape: "pill",
+          text: "signin_with",
+          width: 260,
+        });
+      }
+    };
+
+    if (window.google) {
+      initGoogle();
+      return;
+    }
+
+    const existing = document.querySelector<HTMLScriptElement>('script[data-google-gsi="1"]');
+    if (existing) {
+      existing.addEventListener("load", initGoogle, { once: true });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const script = document.createElement("script");
+    script.src = GOOGLE_SCRIPT;
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleGsi = "1";
+    script.onload = initGoogle;
+    document.head.appendChild(script);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authState, googleClientId, user]);
+
+  const canUpload = useMemo(() => Boolean(user), [user]);
+
+  const fetchSession = async () => {
+    try {
+      const response = await fetch("/api/auth/session", { cache: "no-store" });
+      const payload = (await response.json()) as {
+        user: SessionUser | null;
+        googleClientId: string;
+        enabled: boolean;
+      };
+      setUser(payload.user);
+      setGoogleClientId(payload.googleClientId);
+      setAuthState(payload.enabled ? "ready" : "disabled");
+    } catch {
+      setAuthState("disabled");
+    }
+  };
+
+  const signInWithGoogle = async (credential: string) => {
+    setAuthBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential }),
+      });
+      const payload = (await response.json()) as { user?: SessionUser; error?: string };
+      if (!response.ok || !payload.user) {
+        throw new Error(payload.error || "Google 登录失败");
+      }
+      setUser(payload.user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google 登录失败");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    setAuthBusy(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      setUser(null);
+      setResultUrl("");
+      setFile(null);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   const validateFile = (nextFile: File) => {
+    if (!canUpload) {
+      return "请先使用 Google 登录后再上传图片。";
+    }
     if (!ACCEPTED_TYPES.includes(nextFile.type)) {
       return "Only JPG, PNG, and WEBP files are supported.";
     }
@@ -112,23 +253,50 @@ export default function Home() {
           </p>
         </header>
 
+        <section className="auth-panel">
+          <div>
+            <div className="auth-title">Google 登录</div>
+            <div className="auth-subtitle">
+              {authState === "disabled"
+                ? "还没配置 Google 登录环境变量。先补 NEXT_PUBLIC_GOOGLE_CLIENT_ID 和 AUTH_SECRET。"
+                : user
+                  ? `已登录：${user.name}（${user.email}）`
+                  : "登录后可开始上传图片并使用你的个人额度。"}
+            </div>
+          </div>
+
+          {user ? (
+            <div className="auth-user-box">
+              {user.image ? <img src={user.image} alt={user.name} className="auth-avatar" /> : <div className="auth-avatar auth-avatar-fallback">{user.name.slice(0, 1)}</div>}
+              <button className="secondary-btn" type="button" onClick={logout} disabled={authBusy}>
+                退出登录
+              </button>
+            </div>
+          ) : (
+            <div id="google-signin-button" className="google-signin-slot">
+              {authState === "loading" && <span className="status-info">正在加载登录能力…</span>}
+              {authState === "disabled" && <span className="status-info">Google 登录暂未启用</span>}
+            </div>
+          )}
+        </section>
+
         <section className="upload-section">
           <label
-            className={`upload-box ${dragging ? "upload-box-active" : ""}`}
+            className={`upload-box ${dragging ? "upload-box-active" : ""} ${!canUpload ? "upload-box-disabled" : ""}`}
             onDragOver={(e) => {
               e.preventDefault();
-              setDragging(true);
+              if (canUpload) setDragging(true);
             }}
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
           >
             <div className="upload-box-inner">
               <div className="upload-icon">☁</div>
-              <h2>拖拽图片到这里，或点击上传</h2>
+              <h2>{canUpload ? "拖拽图片到这里，或点击上传" : "请先登录后再上传"}</h2>
               <p>支持 JPG / PNG / WEBP，最大 10MB</p>
-              <span className="upload-button">上传图片</span>
+              <span className="upload-button">{canUpload ? "上传图片" : "先登录"}</span>
             </div>
-            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onInputChange} />
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onInputChange} disabled={!canUpload} />
           </label>
 
           {status === "uploading" && <div className="status-info">正在去除背景，请稍等几秒…</div>}
